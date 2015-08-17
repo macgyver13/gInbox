@@ -25,7 +25,7 @@ How to Install
 1. Download the latest version via the [releases](https://github.com/chenasraf/gInbox/releases) page
 1. Drag & Drop into your `/Applications` folder
 1. Launch!
-2. 
+2. Profit!
 
 License
 =======
