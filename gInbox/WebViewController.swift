@@ -12,114 +12,134 @@ import AppKit
 import Cocoa
 
 class WebViewController: NSViewController, WKNavigationDelegate {
+  
+  @IBOutlet weak var webView: WebView!
+  let settingsController = Settings(windowNibName: "Settings")
+  
+  // constants
+  let webUrl = "https://inbox.google.com"
+  
+  override func viewDidLoad() {
+    super.viewDidLoad()
     
-    @IBOutlet weak var webView: WebView!
-    let settingsController = Settings(windowNibName: "Settings")
+    let request = NSMutableURLRequest(URL: NSURL(string: webUrl)!)
     
-    // constants
-    let webUrl = "https://inbox.google.com"
+    if (!Preferences.getBool("afterFirstLaunch")!) {
+      Preferences.clearDefaults()
+    }
+    webView.UIDelegate = self //register as UIDelegate to receive createWebViewWithRequest
     
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        
-        let request = NSMutableURLRequest(URL: NSURL(string: webUrl)!)
-        
-        if (!Preferences.getBool("afterFirstLaunch")!) {
-            Preferences.clearDefaults()
+    var webUA = Preferences.getString("userAgentString")
+    webView.customUserAgent = webUA
+    webView.mainFrame.loadRequest(request)
+  }
+  
+  @IBAction func openSettings(sender: AnyObject) {
+    settingsController.showWindow(sender, webView: webView)
+  }
+  
+  func webView(sender: WKWebView,
+    decidePolicyForNavigationAction navigationAction: WKNavigationAction, decisionHandler: (WKNavigationActionPolicy) -> Void) {
+      if sender == webView {
+        NSWorkspace.sharedWorkspace().openURL(navigationAction.request.URL!)
+      }
+  }
+  
+  //create a fake webview and return to satisfy request but not navigate to blank page
+  override func webView(sender: WebView!, createWebViewWithRequest request: NSURLRequest!) -> WebView{
+    let haxview = WebView()
+    haxview.policyDelegate = self
+    return haxview
+  }
+  
+  
+  
+  override func webView(sender: WebView!, decidePolicyForNavigationAction actionInformation: [NSObject : AnyObject]!, request: NSURLRequest!, frame: WebFrame!, decisionListener listener: WebPolicyDecisionListener!) {
+    
+    if actionInformation["WebActionOriginalURLKey"] != nil {
+      let url = (actionInformation["WebActionOriginalURLKey"]?.absoluteString as String?)!
+      let hangoutsNav:Bool = (url.hasPrefix("https://plus.google.com/hangouts/") || url.hasPrefix("https://talkgadget.google.com/u/"))
+      let hideHangouts:Bool = (Preferences.getInt("hangoutsMode") > 0)
+      
+      if (url.hasPrefix("#")) {
+        NSWorkspace.sharedWorkspace().openURL(NSURL(string: url)!)
+        listener.ignore()
+      } else if hideHangouts && hangoutsNav {
+        listener.ignore()
+      } else {
+        //If the urlPrefix is known then handle internally otherwise open in remote browser window
+        let urls = Preferences.getArray("urlPrefixes") as? [String]
+        for prefix:String in urls!{
+          if url.hasPrefix(prefix){
+            listener.use()
+            return
+          }
         }
+        listener.ignore()
+        NSWorkspace.sharedWorkspace().openURL(NSURL(string : url)!)
         
-        var webUA = Preferences.getString("userAgentString")
-        webView.customUserAgent = webUA
-        webView.mainFrame.loadRequest(request)
+      }
     }
-    
-    @IBAction func openSettings(sender: AnyObject) {
-        settingsController.showWindow(sender, webView: webView)
+  }
+  
+  override func webView(webView: WebView!, decidePolicyForNewWindowAction actionInformation: [NSObject : AnyObject]!, request: NSURLRequest!, newFrameName frameName: String!, decisionListener listener: WebPolicyDecisionListener!) {
+    if (request.URL!.absoluteString!.hasPrefix("https://accounts.google.com") == false && request.URL!.absoluteString!.hasPrefix("https://inbox.google.com") == false) {
+      NSWorkspace.sharedWorkspace().openURL(NSURL(string: (actionInformation["WebActionOriginalURLKey"]?.absoluteString)!)!)
+      listener.ignore()
+    } else {
+      webView.mainFrame.loadRequest(request)
     }
+  }
+  
+  /*override func webView(sender: WebView!, didFinishLoadForFrame frame: WebFrame!) {
+  let path = NSBundle.mainBundle().pathForResource("gInboxTweaks", ofType: "js", inDirectory: "Assets")
+  let jsString = String(contentsOfFile: path!, encoding: NSUTF8StringEncoding, error: nil)
+  let hangoutsMode: String? = Preferences.getString("hangoutsMode")
+  
+  webView.stringByEvaluatingJavaScriptFromString(jsString)
+  webView.stringByEvaluatingJavaScriptFromString(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
+  }*/
+  
+  func consoleLog(message: String) {
+    NSLog("[JS] -> %@", message)
+  }
+  
+  override func webView(sender: WebView!, didClearWindowObject windowObject: WebScriptObject!, forFrame frame: WebFrame!) {
     
-    func webView(sender: WKWebView,
-        decidePolicyForNavigationAction navigationAction: WKNavigationAction, decisionHandler: (WKNavigationActionPolicy) -> Void) {
-            if sender == webView {
-                NSWorkspace.sharedWorkspace().openURL(navigationAction.request.URL!)
-            }
+    if (webView.mainFrameDocument != nil) { // && frame.DOMDocument == webView.mainFrameDocument) {
+      let document:DOMDocument = webView.mainFrameDocument
+      let hangoutsMode: String? = Preferences.getString("hangoutsMode")
+      let windowScriptObject = webView.windowScriptObject;
+      windowScriptObject.setValue(self, forKey: "gInbox")
+      windowScriptObject.evaluateWebScript("console = { log: function(msg) { gInbox.consoleLog(msg); } }")
+      
+      let path = NSBundle.mainBundle().pathForResource("gInboxTweaks", ofType: "js")
+      let jsString = String(contentsOfFile: path!, encoding: NSUTF8StringEncoding, error: nil)
+      let script = document.createElement("script")
+      let jsText = document.createTextNode(jsString)
+      let bodyEl = document.getElementsByName("body").item(0)
+      
+      script.setAttribute("type", value: "text/javascript")
+      script.appendChild(jsText)
+      bodyEl?.appendChild(script)
+      
+      webView.stringByEvaluatingJavaScriptFromString(jsString)
+      webView.stringByEvaluatingJavaScriptFromString(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
+      
+      windowScriptObject.evaluateWebScript(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
     }
+  }
+  
+  override func webView(sender: WebView!, resource identifier: AnyObject!, willSendRequest request: NSURLRequest!, redirectResponse: NSURLResponse!, fromDataSource dataSource: WebDataSource!) -> NSURLRequest! {
     
-    override func webView(sender: WebView!, decidePolicyForNavigationAction actionInformation: [NSObject : AnyObject]!, request: NSURLRequest!, frame: WebFrame!, decisionListener listener: WebPolicyDecisionListener!) {
-        
-        if actionInformation["WebActionOriginalURLKey"] != nil {
-            let url = (actionInformation["WebActionOriginalURLKey"]?.absoluteString as String?)!
-            let hangoutsNav:Bool = (url.hasPrefix("https://plus.google.com/hangouts/") || url.hasPrefix("https://talkgadget.google.com/u/"))
-            let hideHangouts:Bool = (Preferences.getInt("hangoutsMode") > 0)
-            
-            if (url.hasPrefix("#")) {
-                NSWorkspace.sharedWorkspace().openURL(NSURL(string: url)!)
-                listener.ignore()
-            } else if hideHangouts && hangoutsNav {
-                listener.ignore()
-            } else {
-                listener.use()
-            }
-        }
+    return NSMutableURLRequest(URL: request.URL!, cachePolicy: NSURLRequestCachePolicy.ReloadIgnoringLocalCacheData, timeoutInterval: request.timeoutInterval)
+  }
+  
+  func isSelectorExcludedFromWebScript(selector: Selector) -> Bool {
+    if selector == Selector("consoleLog") {
+      return false
     }
-    
-    override func webView(webView: WebView!, decidePolicyForNewWindowAction actionInformation: [NSObject : AnyObject]!, request: NSURLRequest!, newFrameName frameName: String!, decisionListener listener: WebPolicyDecisionListener!) {
-        if (request.URL!.absoluteString!.hasPrefix("https://accounts.google.com") == false && request.URL!.absoluteString!.hasPrefix("https://inbox.google.com") == false) {
-            NSWorkspace.sharedWorkspace().openURL(NSURL(string: (actionInformation["WebActionOriginalURLKey"]?.absoluteString)!)!)
-            listener.ignore()
-        } else {
-            webView.mainFrame.loadRequest(request)
-        }
-    }
-    
-    /*override func webView(sender: WebView!, didFinishLoadForFrame frame: WebFrame!) {
-        let path = NSBundle.mainBundle().pathForResource("gInboxTweaks", ofType: "js", inDirectory: "Assets")
-        let jsString = String(contentsOfFile: path!, encoding: NSUTF8StringEncoding, error: nil)
-        let hangoutsMode: String? = Preferences.getString("hangoutsMode")
-        
-        webView.stringByEvaluatingJavaScriptFromString(jsString)
-        webView.stringByEvaluatingJavaScriptFromString(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
-    }*/
-    
-    func consoleLog(message: String) {
-        NSLog("[JS] -> %@", message)
-    }
-    
-    override func webView(sender: WebView!, didClearWindowObject windowObject: WebScriptObject!, forFrame frame: WebFrame!) {
-        
-        if (webView.mainFrameDocument != nil) { // && frame.DOMDocument == webView.mainFrameDocument) {
-            let document:DOMDocument = webView.mainFrameDocument
-            let hangoutsMode: String? = Preferences.getString("hangoutsMode")
-            let windowScriptObject = webView.windowScriptObject;
-            windowScriptObject.setValue(self, forKey: "gInbox")
-            windowScriptObject.evaluateWebScript("console = { log: function(msg) { gInbox.consoleLog(msg); } }")
-            
-            let path = NSBundle.mainBundle().pathForResource("gInboxTweaks", ofType: "js")
-            let jsString = String(contentsOfFile: path!, encoding: NSUTF8StringEncoding, error: nil)
-            let script = document.createElement("script")
-            let jsText = document.createTextNode(jsString)
-            let bodyEl = document.getElementsByName("body").item(0)
-            
-            script.setAttribute("type", value: "text/javascript")
-            script.appendChild(jsText)
-            bodyEl?.appendChild(script)
-            
-            webView.stringByEvaluatingJavaScriptFromString(jsString)
-            webView.stringByEvaluatingJavaScriptFromString(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
-            
-            windowScriptObject.evaluateWebScript(String(format: "console.log('test'); updateHangoutsMode(%@)", hangoutsMode!))
-        }
-    }
-    
-    override func webView(sender: WebView!, resource identifier: AnyObject!, willSendRequest request: NSURLRequest!, redirectResponse: NSURLResponse!, fromDataSource dataSource: WebDataSource!) -> NSURLRequest! {
-        
-        return NSMutableURLRequest(URL: request.URL!, cachePolicy: NSURLRequestCachePolicy.ReloadIgnoringLocalCacheData, timeoutInterval: request.timeoutInterval)
-    }
-    
-    func isSelectorExcludedFromWebScript(selector: Selector) -> Bool {
-        if selector == Selector("consoleLog") {
-            return false
-        }
-        return true
-    }
-    
+    return true
+  }
+  
 }
